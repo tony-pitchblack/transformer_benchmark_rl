@@ -35,6 +35,8 @@ def validate_models_on_holdout(
                 logging.info(
                     f"Validate {model_cls} on {dataset_name} using {val_scheme}"
                 )
+                os.environ["RECTOOLS_LOG_MODEL_CLS"] = str(model_cls)
+                os.environ["RECTOOLS_LOG_COMMENT"] = str(model_search_spec["comment"]).strip()
 
                 # Get report path
                 report_file_path = get_report_path(val_scheme, dataset_name, "holdout")
@@ -68,8 +70,15 @@ if __name__ == "__main__":
         help="Path to config file",
         default="configs/holdout/current_params.yaml",
     )
+    parser.add_argument(
+        "--log_backend",
+        type=str,
+        choices=("mlflow", "csv", "both"),
+        default="mlflow",
+    )
     args = parser.parse_args()
 
+    os.environ["RECTOOLS_LOG_BACKEND"] = args.log_backend
     console_logging(level=logging.INFO)
     setup_deterministic()
     validate_models_on_holdout(config_file=args.config_file)

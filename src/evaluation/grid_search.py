@@ -1,3 +1,4 @@
+import argparse
 import logging
 import os
 
@@ -23,6 +24,8 @@ def validate_models_on_cv(config_file: str = "configs/grid_search/current.yaml")
                 logging.info(
                     f'Validate {model_search_spec["cls"]} on {dataset_name} using {val_scheme}'
                 )
+                os.environ["RECTOOLS_LOG_MODEL_CLS"] = str(model_search_spec["cls"])
+                os.environ["RECTOOLS_LOG_COMMENT"] = str(model_search_spec["comment"]).strip()
 
                 report_file = os.path.join(
                     report_file_path, model_search_spec["report_file_name"] + ".csv"
@@ -46,5 +49,21 @@ def validate_models_on_cv(config_file: str = "configs/grid_search/current.yaml")
 
 
 if __name__ == "__main__":
+    parser = argparse.ArgumentParser()
+    parser.add_argument(
+        "--config_file",
+        type=str,
+        help="Path to config file",
+        default="configs/grid_search/current.yaml",
+    )
+    parser.add_argument(
+        "--log_backend",
+        type=str,
+        choices=("mlflow", "csv", "both"),
+        default="mlflow",
+    )
+    args = parser.parse_args()
+
+    os.environ["RECTOOLS_LOG_BACKEND"] = args.log_backend
     console_logging(level=logging.INFO)
-    validate_models_on_cv()
+    validate_models_on_cv(config_file=args.config_file)

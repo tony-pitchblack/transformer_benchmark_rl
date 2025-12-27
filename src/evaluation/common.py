@@ -2,6 +2,7 @@ import importlib.util
 import json
 import logging
 import os
+import re
 import time
 import typing as tp
 from itertools import product
@@ -18,12 +19,86 @@ from rectools.models import model_from_params
 from rectools.models.base import ModelConfig
 
 from src.models.transformers.trainer import get_ckpt_path
-from src.utils import get_current_commit, setup_deterministic
+from src.utils import get_current_commit, get_mlflow_tracking_uri, setup_deterministic
 
 REPORT_PATH = "reports"
 VAL_SCHEMES_PATH = "val_schemes"
 _DATASET_ENV = "RECTOOLS_LOG_DATASET_NAME"
 _VAL_SCHEME_ENV = "RECTOOLS_LOG_VAL_SCHEME"
+_LOG_BACKEND_ENV = "RECTOOLS_LOG_BACKEND"
+_MODEL_CLS_ENV = "RECTOOLS_LOG_MODEL_CLS"
+_COMMENT_ENV = "RECTOOLS_LOG_COMMENT"
+
+_MLFLOW_METRIC_ALLOWED_RE = re.compile(r"[^a-zA-Z0-9_\-\. :/]+")
+
+
+def _mlflow_safe_metric_name(name: str) -> str:
+    return _MLFLOW_METRIC_ALLOWED_RE.sub("", name)
+
+
+def maybe_log_eval_to_mlflow(
+    model: tp.Any, res: Dict[str, Any], eval_type: str, report_file: tp.Optional[str] = None
+) -> None:
+    backend = (os.environ.get(_LOG_BACKEND_ENV) or "mlflow").strip().lower()
+    if backend not in ("mlflow", "both"):
+        return
+
+    from pytorch_lightning.loggers import MLFlowLogger
+
+    import mlflow
+
+    tracking_uri = get_mlflow_tracking_uri()
+    mlflow.set_tracking_uri(tracking_uri)
+
+    run_id: tp.Optional[str] = None
+    trainer = getattr(model, "fit_trainer", None)
+    if trainer is not None:
+        trainer_logger = getattr(trainer, "logger", None)
+        if isinstance(trainer_logger, MLFlowLogger):
+            run_id = trainer_logger.run_id
+        elif isinstance(trainer_logger, (list, tuple)):
+            for logger in trainer_logger:
+                if isinstance(logger, MLFlowLogger):
+                    run_id = logger.run_id
+                    break
+
+    def _log() -> None:
+        mlflow.set_tag("eval_type", eval_type)
+        if report_file is not None:
+            mlflow.set_tag("report_file", report_file)
+
+        for key in ("dataset_name", "val_scheme", "cls", "comment", "commit", "ckpt"):
+            val = res.get(key)
+            if val is not None:
+                mlflow.set_tag(key, str(val))
+
+        metrics_prefix = "val/" if eval_type == "cv" else "test/" if eval_type == "holdout" else ""
+        for key, val in res.items():
+            if val is None or isinstance(val, bool):
+                continue
+            if isinstance(val, (int, float)):
+                mlflow.log_metric(
+                    _mlflow_safe_metric_name(f"{metrics_prefix}{key}"), float(val)
+                )
+
+        model_params = res.get("model_params")
+        if isinstance(model_params, str):
+            try:
+                mlflow.log_dict(json.loads(model_params), "model_params.json")
+            except Exception:
+                pass
+
+    if mlflow.active_run() is not None:
+        _log()
+        return
+
+    if run_id is not None:
+        with mlflow.start_run(run_id=run_id):
+            _log()
+        return
+
+    with mlflow.start_run():
+        _log()
 
 
 class Timer:  # pylint: disable = attribute-defined-outside-init
@@ -255,6 +330,10 @@ def validate_model_on_holdout(
     setup_deterministic()
     os.environ[_DATASET_ENV] = dataset_name
     os.environ[_VAL_SCHEME_ENV] = val_scheme
+    if not (os.environ.get(_MODEL_CLS_ENV) or "").strip() or not (os.environ.get(_COMMENT_ENV) or "").strip():
+        raise RuntimeError(
+            f"Expected {_MODEL_CLS_ENV} and {_COMMENT_ENV} to be set by entrypoint (got {_MODEL_CLS_ENV}={os.environ.get(_MODEL_CLS_ENV)!r}, {_COMMENT_ENV}={os.environ.get(_COMMENT_ENV)!r})"
+        )
     model = model_from_params(model_params)
     interactions = pd.read_csv(f"data/{dataset_name}/{val_scheme}/train.csv")
     holdout = pd.read_csv(f"data/{dataset_name}/{val_scheme}/holdout.csv")
@@ -303,6 +382,7 @@ def validate_model_on_holdout(
         res["ckpt"] = ckpt_path
 
     save_results(res, report_file)
+    maybe_log_eval_to_mlflow(model, res, eval_type="holdout", report_file=report_file)
     logging.info(f"Completed validation for {model_params['cls']} on {dataset_name}")
 
 
@@ -334,6 +414,10 @@ def validate_model_on_cv(
     setup_deterministic()
     os.environ[_DATASET_ENV] = dataset_name
     os.environ[_VAL_SCHEME_ENV] = val_scheme
+    if not (os.environ.get(_MODEL_CLS_ENV) or "").strip() or not (os.environ.get(_COMMENT_ENV) or "").strip():
+        raise RuntimeError(
+            f"Expected {_MODEL_CLS_ENV} and {_COMMENT_ENV} to be set by entrypoint (got {_MODEL_CLS_ENV}={os.environ.get(_MODEL_CLS_ENV)!r}, {_COMMENT_ENV}={os.environ.get(_COMMENT_ENV)!r})"
+        )
     model = model_from_params(model_config)
     interactions = pd.read_csv(f"data/{dataset_name}/{val_scheme}/train.csv")
     dataset = Dataset.construct(interactions)
@@ -370,4 +454,5 @@ def validate_model_on_cv(
     ckpt_path = get_ckpt_path(model)
     if ckpt_path is not None:
         res["ckpt"] = ckpt_path
+    maybe_log_eval_to_mlflow(model, res, eval_type="cv")
     return res

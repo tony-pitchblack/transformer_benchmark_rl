@@ -1,3 +1,4 @@
+import argparse
 import json
 import logging
 import os
@@ -33,6 +34,8 @@ def validate_models_from_cv_reports(
         cv_report_path = report_config["cv_report_path"]
         val_scheme = report_config["val_scheme"]
         model_cls = report_config["cls"]
+        os.environ["RECTOOLS_LOG_MODEL_CLS"] = str(model_cls)
+        os.environ["RECTOOLS_LOG_COMMENT"] = str(report_config["comment"]).strip()
         holdout_report_file_name = report_config["holdout_report_file_name"]
 
         # Get metrics from validation scheme
@@ -70,6 +73,22 @@ def validate_models_from_cv_reports(
 
 
 if __name__ == "__main__":
+    parser = argparse.ArgumentParser()
+    parser.add_argument(
+        "--config_file",
+        type=str,
+        help="Path to config file",
+        default="configs/holdout/current_report.yaml",
+    )
+    parser.add_argument(
+        "--log_backend",
+        type=str,
+        choices=("mlflow", "csv", "both"),
+        default="mlflow",
+    )
+    args = parser.parse_args()
+
+    os.environ["RECTOOLS_LOG_BACKEND"] = args.log_backend
     console_logging(level=logging.INFO)
     setup_deterministic()
-    validate_models_from_cv_reports()
+    validate_models_from_cv_reports(config_file=args.config_file)

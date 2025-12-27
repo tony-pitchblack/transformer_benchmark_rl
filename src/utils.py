@@ -3,6 +3,7 @@ import os
 import subprocess  # nosec
 import typing as tp
 import warnings
+from pathlib import Path
 
 import threadpoolctl
 import yaml
@@ -49,3 +50,28 @@ def setup_deterministic(random_seed: int = 32) -> None:
         os.environ["CUBLAS_WORKSPACE_CONFIG"] = ":4096:8"
     except ImportError as e:
         warnings.warn(f"Failed to import PyTorch: {e}")
+
+
+def get_mlflow_tracking_uri() -> str:
+    try:
+        from dotenv import load_dotenv
+
+        env_path = Path(__file__).resolve().parents[1] / ".env"
+        load_dotenv(dotenv_path=env_path, override=False)
+    except ImportError:
+        pass
+
+    uri = (os.environ.get("MLFLOW_TRACKING_URI") or "").strip()
+    if uri:
+        return uri
+
+    host = (os.environ.get("MLFLOW_HOST") or "").strip()
+    port = (os.environ.get("MLFLOW_PORT") or "").strip()
+    if not host or not port:
+        raise RuntimeError(
+            "MLflow is not configured: set MLFLOW_TRACKING_URI or set MLFLOW_HOST and MLFLOW_PORT"
+        )
+
+    if host.startswith("http://") or host.startswith("https://"):
+        return f"{host}:{port}"
+    return f"http://{host}:{port}"

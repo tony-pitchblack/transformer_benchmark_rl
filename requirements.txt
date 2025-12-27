@@ -1,3 +1,5 @@
 rectools[torch]==0.13.0
-requests==2.27.1
+requests==2.32.3
 fastparquet
+mlflow==3.8.0
+python-dotenv==1.0.1
