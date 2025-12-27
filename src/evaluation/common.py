@@ -22,6 +22,8 @@ from src.utils import get_current_commit, setup_deterministic
 
 REPORT_PATH = "reports"
 VAL_SCHEMES_PATH = "val_schemes"
+_DATASET_ENV = "RECTOOLS_LOG_DATASET_NAME"
+_VAL_SCHEME_ENV = "RECTOOLS_LOG_VAL_SCHEME"
 
 
 class Timer:  # pylint: disable = attribute-defined-outside-init
@@ -251,6 +253,8 @@ def validate_model_on_holdout(
         Path to save results
     """
     setup_deterministic()
+    os.environ[_DATASET_ENV] = dataset_name
+    os.environ[_VAL_SCHEME_ENV] = val_scheme
     model = model_from_params(model_params)
     interactions = pd.read_csv(f"data/{dataset_name}/{val_scheme}/train.csv")
     holdout = pd.read_csv(f"data/{dataset_name}/{val_scheme}/holdout.csv")
@@ -328,6 +332,8 @@ def validate_model_on_cv(
         Dictionary with validation results
     """
     setup_deterministic()
+    os.environ[_DATASET_ENV] = dataset_name
+    os.environ[_VAL_SCHEME_ENV] = val_scheme
     model = model_from_params(model_config)
     interactions = pd.read_csv(f"data/{dataset_name}/{val_scheme}/train.csv")
     dataset = Dataset.construct(interactions)

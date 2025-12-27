@@ -24,7 +24,31 @@ DIVERGENCE_TRESHOLD = None
 
 SHOW_PROGRESS = True
 
-LOGGER = CSVLogger("rectools_logs")
+_LOGS_DIR = "rectools_logs"
+_DATASET_ENV = "RECTOOLS_LOG_DATASET_NAME"
+_VAL_SCHEME_ENV = "RECTOOLS_LOG_VAL_SCHEME"
+
+
+def _make_logger() -> CSVLogger:
+    import os
+
+    dataset_name = (os.environ.get(_DATASET_ENV) or "unknown").strip()
+    val_scheme = (os.environ.get(_VAL_SCHEME_ENV) or "unknown").strip()
+
+    safe_val_scheme = "".join(
+        c if c.isalnum() or c in ("-", "_", ".") else "_" for c in val_scheme
+    )
+    safe_dataset = "".join(
+        c if c.isalnum() or c in ("-", "_", ".") else "_" for c in dataset_name
+    )
+    name = f"lightning_logs/{safe_val_scheme}/{safe_dataset}"
+
+    class _FlatCSVLogger(CSVLogger):
+        @property
+        def log_dir(self) -> str:  # type: ignore[override]
+            return os.path.join(self.save_dir, self.name)
+
+    return _FlatCSVLogger(save_dir=_LOGS_DIR, name=name, version="ignored")
 
 
 class BestModelLoad(Callback):
@@ -143,7 +167,7 @@ def get_trainer() -> Trainer:
         deterministic=True,
         enable_progress_bar=SHOW_PROGRESS,
         enable_model_summary=SHOW_PROGRESS,
-        logger=LOGGER,
+        logger=_make_logger(),
         accelerator=ACCELERATOR,
         devices=DEVICES,
         callbacks=callbacks,
@@ -176,7 +200,7 @@ def get_trainer_200_epochs() -> Trainer:
         deterministic=True,
         enable_progress_bar=SHOW_PROGRESS,
         enable_model_summary=SHOW_PROGRESS,
-        logger=LOGGER,
+        logger=_make_logger(),
         accelerator=ACCELERATOR,
         devices=DEVICES,
         callbacks=callbacks,
@@ -207,7 +231,7 @@ def get_trainer_val_loss() -> Trainer:
         deterministic=True,
         enable_progress_bar=SHOW_PROGRESS,
         enable_model_summary=SHOW_PROGRESS,
-        logger=LOGGER,
+        logger=_make_logger(),
         accelerator=ACCELERATOR,
         devices=DEVICES,
         callbacks=callbacks,
