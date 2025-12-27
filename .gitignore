@@ -178,3 +178,4 @@ src/datasets/temp
 rectools_logs
 lightning_logs
 stdout_log*
+*.code-workspace
