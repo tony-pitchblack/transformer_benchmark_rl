@@ -1,16 +1,4 @@
-"""RetailRocket dataset preparation.
-
-Downloads and prepares interactions for evaluation schemes.
-
-If download fails, run:
-#!/bin/bash
-curl -L -o ~/Downloads/ecommerce-dataset.zip\
-  https://www.kaggle.com/api/v1/datasets/download/retailrocket/ecommerce-dataset
-"""
-
 import logging
-import shutil
-import subprocess
 from pathlib import Path
 
 import pandas as pd
@@ -19,10 +7,9 @@ from rectools import Columns
 from src.datasets.common import (
     RAW_DATA_DIR,
     apply_filtering,
-    extract_archive,
+    extract_dataset,
     process_interactions_ids,
     process_validation_schemes,
-    shell,
 )
 from src.utils import console_logging
 
@@ -30,10 +17,6 @@ DATASET_NAME = "retailrocket"
 
 ZIP_FILENAME = "ecommerce-dataset.zip"
 URL = "https://www.kaggle.com/api/v1/datasets/download/retailrocket/ecommerce-dataset"
-KAGGLE_DOWNLOAD_CMD = """#!/bin/bash
-curl -L -o ~/Downloads/ecommerce-dataset.zip\\
-  https://www.kaggle.com/api/v1/datasets/download/retailrocket/ecommerce-dataset
-"""
 
 INTERACTIONS_FILENAME = "events.csv"
 
@@ -55,43 +38,6 @@ def _resolve_raw_file(raw_data_path: Path, filename: str) -> Path:
     if not matches:
         raise FileNotFoundError(f"Expected {filename} under {raw_data_path}")
     raise RuntimeError(f"Multiple {filename} found under {raw_data_path}: {matches}")
-
-
-def _bash(cmd: str) -> None:
-    logging.info(f"running bash command:\n{cmd}")
-    subprocess.check_call(["bash", "-lc", cmd])
-
-
-def ensure_raw_dataset() -> None:
-    raw_data_path = RAW_DATA_DIR / DATASET_NAME
-    raw_data_path.mkdir(parents=True, exist_ok=True)
-
-    try:
-        _resolve_raw_file(raw_data_path, INTERACTIONS_FILENAME)
-        logging.info("dataset is already extracted")
-        return
-    except FileNotFoundError:
-        pass
-
-    archive_path = raw_data_path / ZIP_FILENAME
-
-    if not archive_path.is_file():
-        downloads_zip = Path.home() / "Downloads" / ZIP_FILENAME
-        _bash(
-            "curl -L -o ~/Downloads/ecommerce-dataset.zip\\\n"
-            "  https://www.kaggle.com/api/v1/datasets/download/retailrocket/ecommerce-dataset"
-        )
-        if not downloads_zip.is_file():
-            raise FileNotFoundError(
-                f"Download did not produce {downloads_zip}. "
-                f"Please download manually:\n{KAGGLE_DOWNLOAD_CMD}"
-            )
-        shutil.copy2(downloads_zip, archive_path)
-
-    extract_archive(archive_path, raw_data_path, archive_type="zip")
-
-    _resolve_raw_file(raw_data_path, INTERACTIONS_FILENAME)
-
 
 def process_raw_file(raw_data_path: Path) -> pd.DataFrame:
     events_path = _resolve_raw_file(raw_data_path, INTERACTIONS_FILENAME)
@@ -139,7 +85,13 @@ def process_raw_file(raw_data_path: Path) -> pd.DataFrame:
 if __name__ == "__main__":
     console_logging(level=logging.INFO)
 
-    ensure_raw_dataset()
+    extract_dataset(
+        dataset_name=DATASET_NAME,
+        interactions_filename=INTERACTIONS_FILENAME,
+        zip_filename=ZIP_FILENAME,
+        url=URL,
+        extracted_dirname=None,
+    )
 
     process_validation_schemes(
         DATASET_NAME,

@@ -2,12 +2,11 @@
 
 Run `python src/datasets/yoochoose.py`.
 
-By default it will try to download the Kaggle zip via `curl` (no credentials). If that
-fails, download manually and place `recsys-challenge-2015.zip` into `data/raw/yoochoose/`.
+If the Kaggle download fails on your environment, use the printed bash snippet to download on
+another machine and then copy `data/raw/yoochoose/` over.
 """
 
 import logging
-import subprocess  # nosec
 from pathlib import Path
 
 import pandas as pd
@@ -15,7 +14,7 @@ from rectools import Columns
 
 from src.datasets.common import (
     apply_filtering,
-    extract_archive,
+    extract_dataset,
     process_interactions_ids,
     process_validation_schemes,
     RAW_DATA_DIR,
@@ -33,42 +32,8 @@ KAGGLE_API_URL = (
 CLICKS_FILENAME = "yoochoose-clicks.dat"
 BUYS_FILENAME = "yoochoose-buys.dat"
 
-KAGGLE_DOWNLOAD_CMD = """#!/bin/bash
-curl -L -o data/raw/yoochoose/recsys-challenge-2015.zip\\
-  https://www.kaggle.com/api/v1/datasets/download/chadgostopp/recsys-challenge-2015
-"""
-
 SESSION_CORE = 2
 ITEM_CORE = 5
-
-
-def _try_download_zip(zip_path: Path) -> None:
-    if zip_path.exists():
-        return
-
-    zip_path.parent.mkdir(parents=True, exist_ok=True)
-
-    try:
-        subprocess.check_call(  # nosec
-            ["curl", "-L", "-o", str(zip_path), KAGGLE_API_URL]
-        )
-    except Exception as e:
-        raise RuntimeError(
-            f"Failed to download Yoochoose via curl. "
-            f"Download it manually from {KAGGLE_DATASET_URL} and place it at {zip_path}"
-        ) from e
-
-
-def download_and_extract(raw_data_path: Path) -> None:
-    zip_path = raw_data_path / ZIP_FILENAME
-    _try_download_zip(zip_path)
-
-    clicks_present = bool(list(raw_data_path.rglob(CLICKS_FILENAME)))
-    buys_present = bool(list(raw_data_path.rglob(BUYS_FILENAME)))
-    if clicks_present and buys_present:
-        return
-
-    extract_archive(zip_path, raw_data_path, archive_type="zip")
 
 
 def _read_clicks(raw_data_path: Path) -> pd.DataFrame:
@@ -144,8 +109,13 @@ def _resolve_raw_file(raw_data_path: Path, filename: str) -> Path:
 if __name__ == "__main__":
     console_logging(level=logging.INFO)
 
-    raw_data_path = RAW_DATA_DIR / DATASET_NAME
-    download_and_extract(raw_data_path)
+    extract_dataset(
+        dataset_name=DATASET_NAME,
+        interactions_filename=CLICKS_FILENAME,
+        zip_filename=ZIP_FILENAME,
+        url=KAGGLE_API_URL,
+        extracted_dirname=None,
+    )
 
     process_validation_schemes(DATASET_NAME, process_raw_file)
 
