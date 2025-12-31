@@ -53,6 +53,9 @@ class CRRLightningModule(LightningModule):
         m_td: int,
         lr_actor: float,
         lr_critic: float,
+        train_encoder: bool = False,
+        lr_encoder: float = 1e-5,
+        weight_decay_encoder: float = 0.0,
         weight_decay: float = 0.0,
         max_advantage: float = 20.0,
     ) -> None:
@@ -60,9 +63,17 @@ class CRRLightningModule(LightningModule):
         self.save_hyperparameters(ignore=["encoder_torch_model"])
 
         self.encoder = encoder_torch_model
-        self.encoder.eval()
-        for p in self.encoder.parameters():
-            p.requires_grad = False
+        self.train_encoder = bool(train_encoder)
+        self.lr_encoder = float(lr_encoder)
+        self.weight_decay_encoder = float(weight_decay_encoder)
+        if self.train_encoder:
+            self.encoder.train()
+            for p in self.encoder.parameters():
+                p.requires_grad = True
+        else:
+            self.encoder.eval()
+            for p in self.encoder.parameters():
+                p.requires_grad = False
 
         # For compatibility with src.models.transformers.trainer.RecallCallback
         self.torch_model = self.encoder
@@ -140,7 +151,12 @@ class CRRLightningModule(LightningModule):
         opt_critic = torch.optim.AdamW(
             self.critic.parameters(), lr=self.lr_critic, weight_decay=self.weight_decay
         )
-        return [opt_actor, opt_critic]
+        if not self.train_encoder:
+            return [opt_actor, opt_critic]
+        opt_encoder = torch.optim.AdamW(
+            self.encoder.parameters(), lr=self.lr_encoder, weight_decay=self.weight_decay_encoder
+        )
+        return [opt_actor, opt_critic, opt_encoder]
 
     @staticmethod
     def _sample_negatives(
@@ -156,6 +172,8 @@ class CRRLightningModule(LightningModule):
     def _encode_states(
         self, batch: tp.Dict[str, torch.Tensor], item_embs: torch.Tensor
     ) -> torch.Tensor:
+        if self.train_encoder:
+            return self.encoder.encode_sessions(batch, item_embs)
         with torch.no_grad():
             return self.encoder.encode_sessions(batch, item_embs)
 
@@ -178,7 +196,9 @@ class CRRLightningModule(LightningModule):
         reward = batch["reward"]
         valid = y != 0
 
-        item_embs = self.encoder.item_model.get_all_embeddings().detach()
+        item_embs = self.encoder.item_model.get_all_embeddings()
+        if not self.train_encoder:
+            item_embs = item_embs.detach()
         n_items = int(item_embs.shape[0])
         n_item_extra_tokens = int(
             getattr(self.encoder.item_model, "n_item_extra_tokens", 0)
@@ -269,14 +289,25 @@ class CRRLightningModule(LightningModule):
         else:
             critic_loss = F.mse_loss(q_sa.masked_select(valid), target.masked_select(valid))
 
-        opt_actor, opt_critic = self.optimizers()  # type: ignore[assignment]
-        opt_critic.zero_grad()
-        self.manual_backward(critic_loss)
-        opt_critic.step()
+        if self.train_encoder:
+            opt_actor, opt_critic, opt_enc = self.optimizers()  # type: ignore[assignment]
+            opt_actor.zero_grad()
+            opt_critic.zero_grad()
+            opt_enc.zero_grad()
+            total_loss = actor_loss + critic_loss
+            self.manual_backward(total_loss)
+            opt_critic.step()
+            opt_actor.step()
+            opt_enc.step()
+        else:
+            opt_actor, opt_critic = self.optimizers()  # type: ignore[assignment]
+            opt_critic.zero_grad()
+            self.manual_backward(critic_loss)
+            opt_critic.step()
 
-        opt_actor.zero_grad()
-        self.manual_backward(actor_loss)
-        opt_actor.step()
+            opt_actor.zero_grad()
+            self.manual_backward(actor_loss)
+            opt_actor.step()
 
         _soft_update_(self.actor_tgt, self.actor, self.tau)
         _soft_update_(self.critic_tgt, self.critic, self.tau)

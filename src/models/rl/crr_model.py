@@ -152,9 +152,15 @@ class SASRecCRR(ModelBase[SASRecCRRConfig]):
             raise ValueError("Expected crr_config or crr_config_file")
 
         self.encoder_model = SASRecModel.load_from_checkpoint(self.encoder_ckpt_path)
-        self.encoder_model.lightning_model.eval()
-        for p in self.encoder_model.torch_model.parameters():
-            p.requires_grad = False
+        train_encoder = bool(crr_cfg.get("train_encoder", False))
+        if train_encoder:
+            self.encoder_model.lightning_model.train()
+            for p in self.encoder_model.torch_model.parameters():
+                p.requires_grad = True
+        else:
+            self.encoder_model.lightning_model.eval()
+            for p in self.encoder_model.torch_model.parameters():
+                p.requires_grad = False
 
         dp = self._build_preparator(dataset, self.encoder_model_params, crr_cfg)
         train_loader = dp.get_dataloader_train()
@@ -183,6 +189,9 @@ class SASRecCRR(ModelBase[SASRecCRRConfig]):
             m_td=int(crr_cfg.get("m_td", 4)),
             lr_actor=float(crr_cfg.get("lr_actor", 1e-4)),
             lr_critic=float(crr_cfg.get("lr_critic", 1e-4)),
+            train_encoder=train_encoder,
+            lr_encoder=float(crr_cfg.get("lr_encoder", 1e-5)),
+            weight_decay_encoder=float(crr_cfg.get("weight_decay_encoder", 0.0)),
             weight_decay=float(crr_cfg.get("weight_decay", 0.0)),
         )
 
