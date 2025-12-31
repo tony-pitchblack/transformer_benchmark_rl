@@ -1,0 +1,20 @@
+name: transf_bench_rl
+channels:
+  - conda-forge
+  - pytorch
+dependencies:
+  - python=3.11
+  - pip
+  - requests=2.32.3
+  - fastparquet
+  - pyarrow
+  - mlflow=3.8.0
+  - python-dotenv=1.0.1
+  - pytorch>=2.2.2
+  - pytorch-lightning>=2.4.0
+  - black=24.4.2
+  - isort=5.13.2
+  - pip:
+      - rectools[torch]==0.13.0
+
+
