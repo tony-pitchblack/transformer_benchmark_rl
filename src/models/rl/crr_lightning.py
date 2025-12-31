@@ -64,6 +64,10 @@ class CRRLightningModule(LightningModule):
         for p in self.encoder.parameters():
             p.requires_grad = False
 
+        # For compatibility with src.models.transformers.trainer.RecallCallback
+        self.torch_model = self.encoder
+        self.item_embs = self.encoder.item_model.get_all_embeddings().detach()
+
         self.actor_hidden_dims = list(actor_hidden_dims)
         self.critic_hidden_dims = list(critic_hidden_dims)
         self.dropout = float(dropout)
@@ -114,6 +118,20 @@ class CRRLightningModule(LightningModule):
             p.requires_grad = False
         for p in self.critic_tgt.parameters():
             p.requires_grad = False
+
+    def validation_step(  # type: ignore[override]
+        self, batch: tp.Dict[str, torch.Tensor], batch_idx: int
+    ) -> tp.Dict[str, torch.Tensor]:
+        x = batch["x"]
+        item_embs = self.encoder.item_model.get_all_embeddings().detach()
+        self.item_embs = item_embs
+
+        state_embs = self._encode_states(batch, item_embs)
+        lengths = (x != 0).sum(dim=1).clamp_min(1) - 1
+        last_state = state_embs[torch.arange(x.shape[0], device=x.device), lengths]
+        policy_emb = self.actor(last_state)
+        logits = policy_emb @ item_embs.to(policy_emb.device).T
+        return {"logits": logits}
 
     def configure_optimizers(self):
         opt_actor = torch.optim.AdamW(

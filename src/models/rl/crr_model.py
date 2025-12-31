@@ -1,4 +1,5 @@
 import typing as tp
+import warnings
 
 import pandas as pd
 import torch
@@ -10,7 +11,7 @@ from rectools.dataset import Dataset
 from rectools.dataset.identifiers import IdMap
 from rectools.models.base import ErrorBehaviour, ExternalIds, ModelBase, ModelConfig
 from rectools.models.nn.transformers.base import _get_class_obj
-from rectools.models.nn.transformers.lightning import TransformerLightningModule
+from rectools.models.nn.transformers.sasrec import SASRecModel
 from rectools.utils.misc import get_class_or_function_full_path
 
 from src.models.rl.crr_lightning import CRRLightningModule
@@ -35,6 +36,7 @@ class SASRecCRRConfig(ModelConfig):
     encoder_ckpt_path: str
     encoder_model_params: tp.Optional[tp.Dict[str, tp.Any]] = None
     get_trainer_func: tp.Optional[TrainerFuncType] = None
+    deterministic: tp.Optional[bool] = None
 
 
 def _ensure_trainer(get_trainer_func: tp.Optional[tp.Callable[[], Trainer]]) -> Trainer:
@@ -53,6 +55,7 @@ class SASRecCRR(ModelBase[SASRecCRRConfig]):
         encoder_ckpt_path: str,
         encoder_model_params: tp.Optional[tp.Dict[str, tp.Any]] = None,
         get_trainer_func: tp.Optional[tp.Callable[[], Trainer]] = None,
+        deterministic: tp.Optional[bool] = None,
         verbose: int = 0,
     ) -> None:
         super().__init__(verbose=verbose)
@@ -61,8 +64,9 @@ class SASRecCRR(ModelBase[SASRecCRRConfig]):
         self.encoder_ckpt_path = encoder_ckpt_path
         self.encoder_model_params = encoder_model_params or None
         self.get_trainer_func = get_trainer_func
+        self.deterministic = deterministic
 
-        self.encoder_pl: TransformerLightningModule
+        self.encoder_model: SASRecModel
         self.crr_pl: CRRLightningModule
         self.fit_trainer: Trainer
 
@@ -79,6 +83,7 @@ class SASRecCRR(ModelBase[SASRecCRRConfig]):
             encoder_ckpt_path=self.encoder_ckpt_path,
             encoder_model_params=self.encoder_model_params,
             get_trainer_func=self.get_trainer_func,
+            deterministic=self.deterministic,
             verbose=self.verbose,
         )
 
@@ -90,6 +95,7 @@ class SASRecCRR(ModelBase[SASRecCRRConfig]):
             encoder_ckpt_path=config.encoder_ckpt_path,
             encoder_model_params=config.encoder_model_params,
             get_trainer_func=config.get_trainer_func,
+            deterministic=config.deterministic,
             verbose=config.verbose,
         )
 
@@ -111,6 +117,8 @@ class SASRecCRR(ModelBase[SASRecCRRConfig]):
             ):
                 if key in encoder_model_params:
                     dp_params[key] = encoder_model_params[key]
+        if isinstance(dp_params.get("get_val_mask_func"), str):
+            dp_params["get_val_mask_func"] = _get_class_obj(dp_params["get_val_mask_func"])
         dp_params.update(crr_cfg.get("data_preparator", {}))
 
         if "session_max_len" not in dp_params:
@@ -143,9 +151,9 @@ class SASRecCRR(ModelBase[SASRecCRRConfig]):
         else:
             raise ValueError("Expected crr_config or crr_config_file")
 
-        self.encoder_pl = TransformerLightningModule.load_from_checkpoint(self.encoder_ckpt_path)
-        self.encoder_pl.eval()
-        for p in self.encoder_pl.parameters():
+        self.encoder_model = SASRecModel.load_from_checkpoint(self.encoder_ckpt_path)
+        self.encoder_model.lightning_model.eval()
+        for p in self.encoder_model.torch_model.parameters():
             p.requires_grad = False
 
         dp = self._build_preparator(dataset, self.encoder_model_params, crr_cfg)
@@ -163,7 +171,7 @@ class SASRecCRR(ModelBase[SASRecCRRConfig]):
         self.n_item_extra_tokens = int(dp.n_item_extra_tokens)
 
         self.crr_pl = CRRLightningModule(
-            encoder_torch_model=self.encoder_pl.torch_model,
+            encoder_torch_model=self.encoder_model.torch_model,
             actor_hidden_dims=crr_cfg.get("actor_hidden_dims", [256, 256]),
             critic_hidden_dims=crr_cfg.get("critic_hidden_dims", [256, 256]),
             dropout=float(crr_cfg.get("dropout", 0.0)),
@@ -197,21 +205,30 @@ class SASRecCRR(ModelBase[SASRecCRRConfig]):
             raise RuntimeError("Model is not fitted.")
 
         users_arr = pd.Index(users)
-        internal_users = self.user_id_map.convert_to_internal(users_arr.to_numpy(), on_unsupported_targets)
-        internal_users = pd.Index(internal_users)
-        mask_supported = internal_users >= 0
-        users_supported = users_arr[mask_supported]
-        internal_users = internal_users[mask_supported]
+        supported_mask = users_arr.isin(self.user_id_map.external_ids)
+        users_supported = users_arr[supported_mask]
+        if len(users_supported) != len(users_arr):
+            n_missing = len(users_arr) - len(users_supported)
+            if on_unsupported_targets == "warn":
+                warnings.warn(f"{n_missing} target users are missing in model user_id_map and will be skipped.")
+            elif on_unsupported_targets == "raise":
+                missing = users_arr[~supported_mask]
+                raise ValueError(f"Some target users are missing in model user_id_map: {missing[:10].tolist()}")
+        if len(users_supported) == 0:
+            return pd.DataFrame(columns=[Columns.User, Columns.Item, Columns.Score] + ([Columns.Rank] if add_rank_col else []))
 
-        interactions = dataset.interactions.df
+        interactions = dataset.get_raw_interactions(include_weight=True, include_datetime=True, include_extra_cols=True)
         if Columns.Datetime in interactions.columns:
             interactions = interactions.sort_values(Columns.Datetime, kind="stable")
         interactions = interactions[interactions[Columns.User].isin(users_supported)]
+
+        item_mask = interactions[Columns.Item].isin(self.item_id_map.external_ids)
+        interactions = interactions[item_mask].copy()
         interactions[Columns.Item] = self.item_id_map.convert_to_internal(
             interactions[Columns.Item].to_numpy(),
-            on_unsupported_targets="warn",
+            strict=True,
         )
-        interactions = interactions[interactions[Columns.Item] >= self.n_item_extra_tokens]
+        interactions = interactions[interactions[Columns.Item] >= self.n_item_extra_tokens].copy()
 
         grouped = interactions.groupby(Columns.User, sort=False)[Columns.Item].apply(list)
         x = torch.zeros((len(users_supported), self.session_max_len), dtype=torch.long)
@@ -222,10 +239,12 @@ class SASRecCRR(ModelBase[SASRecCRRConfig]):
             seq = seq[-self.session_max_len :]
             x[i, -len(seq) :] = torch.tensor(seq, dtype=torch.long)
 
-        item_embs = self.encoder_pl.torch_model.item_model.get_all_embeddings().detach()
+        item_embs = self.encoder_model.torch_model.item_model.get_all_embeddings().detach()
         batch = {"x": x.to(self.crr_pl.device)}
         with torch.no_grad():
-            state_embs = self.encoder_pl.torch_model.encode_sessions(batch, item_embs.to(self.crr_pl.device))
+            state_embs = self.encoder_model.torch_model.encode_sessions(
+                batch, item_embs.to(self.crr_pl.device)
+            )
             lengths = (batch["x"] != 0).sum(dim=1).clamp_min(1) - 1
             last_state = state_embs[torch.arange(state_embs.shape[0]), lengths]
             policy_emb = self.crr_pl.actor(last_state)
@@ -234,7 +253,8 @@ class SASRecCRR(ModelBase[SASRecCRRConfig]):
 
             if items_to_recommend is not None:
                 allowed = self.item_id_map.convert_to_internal(
-                    pd.Index(items_to_recommend).to_numpy(), on_unsupported_targets="warn"
+                    pd.Index(items_to_recommend).to_numpy(),
+                    strict=False,
                 )
                 allowed = torch.tensor(allowed, device=scores.device)
                 allowed = allowed[allowed >= self.n_item_extra_tokens]
@@ -252,7 +272,8 @@ class SASRecCRR(ModelBase[SASRecCRRConfig]):
 
             _, topk = scores.topk(k=k, dim=1)
 
-        ext_items = self.item_id_map.convert_to_external(topk.detach().cpu().numpy())
+        topk_np = topk.detach().cpu().numpy().reshape(-1)
+        ext_items = self.item_id_map.convert_to_external(topk_np).reshape(-1, k)
         res = pd.DataFrame(
             {
                 Columns.User: users_supported.to_numpy().repeat(k),

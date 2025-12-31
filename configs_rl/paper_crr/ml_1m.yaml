@@ -17,16 +17,16 @@ models:
       deterministic: True
       crr_config:
         reward_fn: rating_threshold
-        reward_threshold: 3.5
-        reward_rating_col: rating
+        reward_threshold: 0.0
+        reward_rating_col: weight
         gamma: 0.99
         beta: 1.0
         tau: 0.005
-        m_adv: 4
-        m_td: 4
-        n_negatives: 256
-        actor_hidden_dims: [256, 256]
-        critic_hidden_dims: [256, 256]
+        m_adv: 2
+        m_td: 2
+        n_negatives: 64
+        actor_hidden_dims: [64]
+        critic_hidden_dims: [64]
         dropout: 0.0
         lr_actor: 0.0001
         lr_critic: 0.0001

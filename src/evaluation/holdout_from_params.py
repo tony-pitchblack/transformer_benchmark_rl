@@ -29,10 +29,18 @@ def _resolve_ckpt_from_report_csv(
     if len(rows) == 0:
         return None
     if len(rows) > 1:
-        raise ValueError(
-            f"Ambiguous checkpoint match for dataset_name={dataset_name!r}, comment={comment!r}, cls={cls!r}: {len(rows)} rows"
+        logging.warning(
+            "Multiple checkpoint matches for dataset_name=%r comment=%r cls=%r in %r; using the last row (%d matches)",
+            dataset_name,
+            comment,
+            cls,
+            report_csv,
+            len(rows),
         )
-    return str(rows.iloc[0]["ckpt"])
+    ckpt = rows.iloc[-1]["ckpt"]
+    if pd.isna(ckpt):
+        return None
+    return str(ckpt)
 
 
 def _default_pretrained_report_csv(
