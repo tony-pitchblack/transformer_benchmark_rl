@@ -175,6 +175,7 @@ src/datasets/temp
 
 *.ipynb
 
+reports
 rectools_logs
 lightning_logs
 stdout_log*
