@@ -1,0 +1,35 @@
+from_pretrained: true
+pretrained_config_file: configs/paper/loo/ml_1m.yaml
+
+datasets:
+  - "ml_1m"
+
+val_schemes:
+  - "leave_one_out"
+
+models:
+  - report_file_name: ml_1m_crr
+    cls: src.models.rl.crr_model.SASRecCRR
+    comment: crr
+    fixed_parameters:
+      get_trainer_func: src.models.transformers.trainer.get_trainer
+      verbose: 1
+      deterministic: True
+      crr_config:
+        reward_fn: rating_threshold
+        reward_threshold: 3.5
+        reward_rating_col: rating
+        gamma: 0.99
+        beta: 1.0
+        tau: 0.005
+        m_adv: 4
+        m_td: 4
+        n_negatives: 256
+        actor_hidden_dims: [256, 256]
+        critic_hidden_dims: [256, 256]
+        dropout: 0.0
+        lr_actor: 0.0001
+        lr_critic: 0.0001
+        weight_decay: 0.0
+    search_parameters: []
+
