@@ -90,7 +90,7 @@ def validate_models_on_holdout(
                             current_name = model_search_spec["comment"] + "_" + search_name
                         else:
                             current_name = model_search_spec["comment"]
-                        os.environ["RECTOOLS_LOG_COMMENT"] = str(current_name).strip()
+                        os.environ["RECTOOLS_LOG_COMMENT"] = str(model_search_spec["comment"]).strip()
                         validate_model_on_holdout(
                             dataset_name=dataset_name,
                             model_params=model_params,
@@ -134,7 +134,7 @@ def validate_models_on_holdout(
                                 run_name = f"{pretrained_comment}__{model_search_spec['comment']}_{crr_search_name}"
                             else:
                                 run_name = f"{pretrained_comment}__{model_search_spec['comment']}"
-                            os.environ["RECTOOLS_LOG_COMMENT"] = str(run_name).strip()
+                            os.environ["RECTOOLS_LOG_COMMENT"] = str(model_search_spec["comment"]).strip()
 
                             validate_model_on_holdout(
                                 dataset_name=dataset_name,

@@ -88,7 +88,7 @@ def _make_mlflow_logger() -> MLFlowLogger:
     import os
 
     dataset_name, val_scheme = _get_dataset_and_scheme()
-    experiment_name = f"{_safe_name(dataset_name)}/{_safe_name(val_scheme)}"
+    experiment_name = f"{_safe_name(dataset_name)}-{_safe_name(val_scheme)}"
 
     model_cls = (os.environ.get(_MODEL_CLS_ENV) or "").strip()
     comment = (os.environ.get(_COMMENT_ENV) or "").strip()
@@ -96,7 +96,7 @@ def _make_mlflow_logger() -> MLFlowLogger:
         raise RuntimeError(
             f"MLflow run naming requires {_MODEL_CLS_ENV} and {_COMMENT_ENV} to be set (got {_MODEL_CLS_ENV}={model_cls!r}, {_COMMENT_ENV}={comment!r})"
         )
-    run_name = f"{_safe_name(model_cls)}/{_safe_name(comment)}"
+    run_name = f"{_safe_name(model_cls)}-{_safe_name(comment)}"
 
     tracking_uri = get_mlflow_tracking_uri()
     return PrefixedMLFlowLogger(
