@@ -1,6 +1,7 @@
 import gzip
 import logging
 import os
+import re
 import shlex
 import shutil
 import subprocess
@@ -18,6 +19,114 @@ from tqdm import tqdm
 VAL_SCHEMES_PATH = Path("src") / "val_schemes"
 RAW_DATA_DIR = Path("data/raw")
 INTERACTIONS_SAVE_DIR = Path("data")
+
+
+_KAGGLE_API_RE = re.compile(
+    r"^https?://www\.kaggle\.com/api/v1/datasets/download/(?P<owner>[^/]+)/(?P<slug>[^/?#]+)"
+)
+
+
+def _q(value: tp.Union[str, Path]) -> str:
+    return shlex.quote(str(value))
+
+
+def _read_dotenv(path: Path) -> tp.Dict[str, str]:
+    if not path.exists():
+        return {}
+    env: tp.Dict[str, str] = {}
+    for raw in path.read_text(encoding="utf-8").splitlines():
+        line = raw.strip()
+        if not line or line.startswith("#"):
+            continue
+        if line.startswith("export "):
+            line = line[len("export ") :].strip()
+        if "=" not in line:
+            continue
+        k, v = line.split("=", 1)
+        k = k.strip()
+        v = v.strip()
+        if (v.startswith('"') and v.endswith('"')) or (v.startswith("'") and v.endswith("'")):
+            v = v[1:-1]
+        if k:
+            env[k] = v
+    return env
+
+
+def get_download_hint_dir() -> Path:
+    env = _read_dotenv(Path(".env"))
+    raw = env.get("DOWNLOAD_HINT_DIR_LOCAL") or os.environ.get("DOWNLOAD_HINT_DIR_LOCAL")
+    if raw:
+        return Path(raw).expanduser()
+    return Path.home() / "Downloads"
+
+
+def get_download_hint_dir_remote() -> tp.Optional[str]:
+    env = _read_dotenv(Path(".env"))
+    raw = env.get("DOWNLOAD_HINT_DIR_REMOTE") or os.environ.get("DOWNLOAD_HINT_DIR_REMOTE")
+    if raw:
+        raw = raw.strip()
+    return raw or None
+
+
+def make_manual_download_bash(
+    *,
+    dataset_name: str,
+    url: str,
+    raw_data_path: Path,
+    filename: str,
+    archive_type: tp.Optional[str] = None,
+    extracted_dirname: tp.Optional[str] = None,
+) -> str:
+    hint_dir = get_download_hint_dir()
+    hint_dir_remote = get_download_hint_dir_remote()
+    hint_download_path = hint_dir / filename
+    raw_download_path = raw_data_path / filename
+    hint_dir_remote_val = _q(hint_dir_remote) if hint_dir_remote else '""'
+
+    m = _KAGGLE_API_RE.match(url)
+    if m is not None:
+        ds = f"{m.group('owner')}/{m.group('slug')}"
+        download_cmd = f"kaggle datasets download -d {_q(ds)} -p {_q(hint_dir)}"
+    else:
+        download_cmd = f"curl -L --fail -o {_q(hint_download_path)} {_q(url)}"
+
+    cmds = [
+        "#!/usr/bin/env bash",
+        "set -euo pipefail",
+        f"DATASET_NAME={_q(dataset_name)}",
+        f"DOWNLOAD_HINT_DIR_LOCAL={_q(hint_dir)}",
+        f"DOWNLOAD_HINT_DIR_REMOTE={hint_dir_remote_val}",
+        "mkdir -p \"$DOWNLOAD_HINT_DIR_LOCAL\"",
+        f"mkdir -p {_q(raw_data_path)}",
+        download_cmd,
+        "if [[ -n \"$DOWNLOAD_HINT_DIR_REMOTE\" ]]; then",
+        "  if [[ \"$DOWNLOAD_HINT_DIR_REMOTE\" == *:* ]]; then",
+        "    _USERHOST=\"${DOWNLOAD_HINT_DIR_REMOTE%%:*}\"",
+        "    _REMOTEROOT=\"${DOWNLOAD_HINT_DIR_REMOTE#*:}\"",
+        "    _REMOTEDIR=\"${_REMOTEROOT%/}/$DATASET_NAME\"",
+        "    ssh \"$_USERHOST\" \"mkdir -p \\\"$_REMOTEDIR\\\"\"",
+        f"    scp -p {_q(hint_download_path)} \"$_USERHOST:$_REMOTEDIR/\"",
+        "  else",
+        "    _REMOTEDIR=\"${DOWNLOAD_HINT_DIR_REMOTE%/}/$DATASET_NAME\"",
+        "    mkdir -p \"$_REMOTEDIR\"",
+        f"    cp -f {_q(hint_download_path)} \"$_REMOTEDIR/\"",
+        "  fi",
+        "fi",
+        f"cp -f {_q(hint_download_path)} {_q(raw_download_path)}",
+    ]
+
+    if archive_type == "zip":
+        cmds.append(f"unzip -o {_q(raw_download_path)} -d {_q(raw_data_path)}")
+        if extracted_dirname:
+            extracted_path = raw_data_path / extracted_dirname
+            cmds.append(f"mv {_q(extracted_path)}/* {_q(raw_data_path)}/")
+            cmds.append(f"rm -rf {_q(extracted_path)}")
+    elif archive_type == "gz":
+        out_file = raw_data_path / Path(filename).stem
+        cmds.append(f"gzip -dc {_q(raw_download_path)} > {_q(out_file)}")
+
+    cmds.append(f'echo "OK: downloaded {dataset_name} into {_q(raw_data_path)}"')
+    return "\n".join(cmds) + "\n"
 
 
 def shell(cmd):
@@ -95,33 +204,31 @@ def download_file(url, filename, data_dir):
     mkdir_p_local(data_dir)
     full_filename = os.path.join(get_dir(), data_dir, filename)
     if not os.path.isfile(full_filename):
-        if (
-            url.startswith("https://disk.yandex.ru/")
-            or url.startswith("https://www.kaggle.com")
-            or url.startswith("https://drive.google.com")
-        ):
-            dataset_name = Path(data_dir).name
-            raise RuntimeError(
-                f"Dataset {dataset_name} doesn't have a public link. "
-                f"Please download it manually from {url} "
-                f"and place it in data/raw/{dataset_name}/ directory."
-            )
-
         logging.info(f"downloading {filename} file")
         response = requests.get(url, stream=True)
+        response.raise_for_status()
         total_size = int(response.headers.get("content-length", 0))
         block_size = 1024  # 1 KB
 
-        with open(full_filename, "wb") as out_file, tqdm(
-            desc=filename,
-            total=total_size,
-            unit="iB",
-            unit_scale=True,
-            unit_divisor=1024,
-        ) as pbar:
-            for data in response.iter_content(block_size):
-                size = out_file.write(data)
-                pbar.update(size)
+        try:
+            with open(full_filename, "wb") as out_file, tqdm(
+                desc=filename,
+                total=total_size,
+                unit="iB",
+                unit_scale=True,
+                unit_divisor=1024,
+            ) as pbar:
+                for data in response.iter_content(block_size):
+                    if not data:
+                        continue
+                    size = out_file.write(data)
+                    pbar.update(size)
+        except Exception:
+            try:
+                if os.path.isfile(full_filename):
+                    os.remove(full_filename)
+            finally:
+                raise
 
         logging.info(f"{filename} dataset downloaded")
     else:
@@ -375,23 +482,50 @@ def extract_dataset(
     """
     raw_data_path = RAW_DATA_DIR / dataset_name
 
-    # Construct file paths
-    interactions_file = raw_data_path / interactions_filename
-    if zip_filename is not None and extracted_dirname is not None:
-        interactions_file = raw_data_path / extracted_dirname / interactions_filename
-        
-    archive_file = raw_data_path / zip_filename if zip_filename else None
+    raw_data_path.mkdir(parents=True, exist_ok=True)
 
-    if interactions_file.is_file():
+    direct_interactions_file = raw_data_path / interactions_filename
+    any_interactions_file = next(raw_data_path.rglob(interactions_filename), None)
+
+    if direct_interactions_file.is_file() or any_interactions_file is not None:
         logging.info("dataset is already extracted")
         return
 
+    download_name = zip_filename or interactions_filename
+    archive_type = None
+    if zip_filename is not None:
+        archive_type = Path(zip_filename).suffix.lstrip(".") or "zip"
+
+    manual_cmd = make_manual_download_bash(
+        dataset_name=dataset_name,
+        url=url,
+        raw_data_path=raw_data_path,
+        filename=download_name,
+        archive_type=archive_type if zip_filename is not None else None,
+        extracted_dirname=extracted_dirname if zip_filename is not None else None,
+    )
+    logging.info(
+        "manual download command (run on VDS and copy data/raw/* to compute):\n%s",
+        manual_cmd,
+    )
+
     # Download dataset if needed
-    download_file(url, zip_filename or interactions_filename, f"../{raw_data_path}")
+    try:
+        download_file(url, download_name, f"../{raw_data_path}")
+    except Exception as e:
+        raise RuntimeError(
+            f"Failed to download {download_name} from {url}. Run this on VDS and copy data/raw/{dataset_name}/:\n{manual_cmd}"
+        ) from e
 
     # Extract dataset if zip_filename is provided
     if zip_filename is not None:
-        extract_archive(archive_file, raw_data_path)
+        archive_file = raw_data_path / zip_filename
+        try:
+            extract_archive(archive_file, raw_data_path)
+        except Exception as e:
+            raise RuntimeError(
+                f"Failed to extract {archive_file}. If the archive is corrupted, delete it and re-download:\n{manual_cmd}"
+            ) from e
 
     # Handle directory structure if needed (for zip files with directories)
     if extracted_dirname:

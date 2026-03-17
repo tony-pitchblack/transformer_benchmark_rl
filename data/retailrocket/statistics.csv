@@ -1,0 +1,2 @@
+n_users,n_items,n_interactions,avg_length,sparsity,min_date,max_date,time_split_n_train_interactions,time_split_n_holdout_interactions,time_split_holdout_ratio,leave_one_out_n_train_interactions,leave_one_out_n_holdout_interactions,leave_one_out_holdout_ratio,loo_correction_leave_one_out
+338670,59060,1491073,4.402731272329997,0.9999254532463202,2015-05-03 03:00:04.384,2015-09-18 02:59:47.788,1442934,10844,0.00745918565283,1152403,167795,0.1270983594885009,0.4954528006614108
