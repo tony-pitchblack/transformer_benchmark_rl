@@ -38,6 +38,14 @@ def _safe_name(name: str) -> str:
     return "".join(c if c.isalnum() or c in ("-", "_", ".") else "_" for c in name)
 
 
+def _class_leaf(name: str) -> str:
+    leaf = name.strip()
+    for sep in (".", ":", "/"):
+        if sep in leaf:
+            leaf = leaf.split(sep)[-1]
+    return leaf
+
+
 def _get_dataset_and_scheme() -> tuple[str, str]:
     import os
 
@@ -96,7 +104,8 @@ def _make_mlflow_logger() -> MLFlowLogger:
         raise RuntimeError(
             f"MLflow run naming requires {_MODEL_CLS_ENV} and {_COMMENT_ENV} to be set (got {_MODEL_CLS_ENV}={model_cls!r}, {_COMMENT_ENV}={comment!r})"
         )
-    run_name = f"{_safe_name(model_cls)}-{_safe_name(comment)}"
+    model_cls_leaf = _class_leaf(model_cls)
+    run_name = f"{_safe_name(model_cls_leaf)}-{_safe_name(comment)}"
 
     tracking_uri = get_mlflow_tracking_uri()
     return PrefixedMLFlowLogger(
